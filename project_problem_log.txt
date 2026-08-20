@@ -1,0 +1,566 @@
+================================================================================
+CLINICAL DECISION SUPPORT RAG APP (NICE CG150)
+DEEP TECHNICAL PROBLEM LOG & ARCHITECTURAL POST-MORTEM
+================================================================================
+Documented: Project Journey, Root Causes, Thought Process & Exact Solutions
+Target System: Local Windows + Portable Multi-Device + Cloud Readiness
+Stack: Python (FastAPI, SQLite, FAISS, PyTorch, HuggingFace Transformers, BM25),
+       Google Gemini LLM, React 18, Vite, Tailwind CSS, .NET CSC Launcher
+================================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. THE RAW PYTHON CLI GAP (NO CLINICAL USER INTERFACE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  The project started as a raw Python script (`medical_clinical_rag.py`) running
+  retrievals inside a console. Clinicians and coworkers had no intuitive way to
+  query guidelines, see formatted recommendations, toggle themes, or review history.
+
+WHAT CAUSED IT:
+  RAG pipelines are typically prototyped in Jupyter notebooks or terminal scripts.
+  There was no web server layer, no user session management, and no frontend.
+
+HOW WE THOUGHT ABOUT IT:
+  We needed an architecture that:
+  - Didn't require running two separate terminal servers (e.g. Node + Python)
+  - Could be bundled as a single launchable unit
+  - Kept frontend state reactive while leveraging FastAPI's high performance
+
+HOW IT WAS FIXED:
+  1. Built a FastAPI backend (`backend/app.py`) providing `/api/query`,
+     `/api/auth/*`, and `/api/admin/*` endpoints.
+  2. Built a React 18 frontend (`frontend/src/App.jsx`) using Vite & Tailwind CSS.
+  3. Configured FastAPI to mount and statically serve the compiled React SPA
+     (`frontend/dist`) via `StaticFiles` and a catch-all route `/{full_path:path}`
+     returning `index.html`.
+  4. Built `desktop_main.py` which discovers a free TCP port (8000..8010),
+     spawns a background thread to launch the default web browser, and starts
+     uvicorn server programmatically.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. SILENT CRASHES ON WINDOWS LAUNCH (UNICODE & ENCODING ERRORS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  When clicking `ClinicalDecisionSupport.exe` or executing scripts via Command
+  Prompt, the terminal opened for a split second, printed nothing, and died.
+
+WHAT CAUSED IT (ROOT CAUSES):
+  1. Windows Legacy Code Pages: Default Windows CMD/PowerShell runs on `cp1252`
+     or `cp437` encodings. Python output containing Unicode characters (like `✓`,
+     `•`, or emojis) triggered `UnicodeEncodeError: 'charmap' codec can't encode...`
+     which immediately terminated the process.
+  2. Uncaught Exceptions during startup: If any module failed to import or threw
+     an exception, the process terminated without holding the console window open.
+  3. Hardcoded Python Interpreter Path in C# Launcher: The first iteration of
+     `Launcher.cs` pointed directly to `C:\Users\EGPC\AppData\Local\...`. On any
+     system where that specific user profile did not exist, it failed instantly.
+
+HOW WE THOUGHT ABOUT IT:
+  We must sanitize all standard streams at the earliest possible byte of execution
+  before any libraries or prints execute. Additionally, the launcher must discover
+  Python dynamically on whatever machine it runs on.
+
+HOW IT WAS FIXED:
+  1. Top-of-file Stream Reconfiguration:
+     ```python
+     import sys
+     try:
+         if hasattr(sys.stdout, 'reconfigure'):
+             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+         if hasattr(sys.stderr, 'reconfigure'):
+             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+     except Exception:
+         pass
+     ```
+  2. Replaced all console glyphs with standard ASCII safe strings (`[OK]`, `[ERROR]`).
+  3. Added top-level try/except blocks inside `desktop_main.py` with `input("Press Enter to exit...")`.
+  4. Rewrote the launcher in C# (`Launcher_v3.cs`) to dynamically search the system
+     `PATH` environment variable using `where python` / `where py` / registry checks.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. AUTHENTICATION UX & ACCOUNT SWITCH SECURITY FLAW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  - The application previously placed a hard gate at startup, requiring login
+    before viewing any UI.
+  - The UI featured "quick account switcher" buttons allowing one-click login
+    into accounts (`admin`, `user1`, etc.) without password validation.
+  - Users had no way to reveal/check passwords while typing.
+
+WHAT CAUSED IT:
+  - The quick-switch bar was initially introduced as a convenience for testing.
+  - The auth gate was placed at root state rather than action-based triggers.
+
+HOW WE THOUGHT ABOUT IT:
+  In a clinical decision workflow, doctors need immediate access to inspect the
+  interface, but queries and history tracking must be authenticated.
+  Quick-switch buttons are a security violation in multi-user environments.
+
+HOW IT WAS FIXED:
+  1. Removed the quick-switch bar completely from `App.jsx`.
+  2. Implemented Just-In-Time (JIT) Authentication:
+     - The user enters the app freely and types their query into the input box.
+     - Upon pressing "Send", the frontend detects if `user === null`.
+     - If unauthenticated, it saves `pendingQuery` and opens the Auth Modal.
+     - Once logged in, it automatically dispatches the stored `pendingQuery`.
+  3. Added "Remember Me" persistence using `localStorage.setItem('cds_user', ...)`
+     which auto-restores the session on app launch.
+  4. Added show/hide password toggle buttons with `Eye` / `EyeOff` Lucide icons.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. APPLICATION PACKAGING & ASSET OBFUSCATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  The user requested a "real app" with a clean icon where non-technical staff
+  would not see loose `.py`, `.json`, or `.bat` files.
+
+WHAT CAUSED IT:
+  Distributing raw folder repositories exposes raw code, confusing non-devs.
+
+HOW WE THOUGHT ABOUT IT:
+  Rather than shipping a heavy 2GB PyInstaller single-exe (which has slow startup
+  times due to unpacking temporary directories on every run), we can compile a
+  native lightweight .NET Windows Executable using the native Windows C# compiler
+  (`csc.exe`), set a high-resolution embedded medical icon, and encapsulate all
+  runtime files in an internal hidden directory structure.
+
+HOW IT WAS FIXED:
+  1. Created a multi-resolution `.ico` icon (16x16 to 256x256) with a teal shield
+     and white cross using Python Pillow.
+  2. Authored `Launcher_v3.cs` with P/Invoke support to hide the console window if
+     desired and start `desktop_main.py`.
+  3. Compiled it directly on Windows via:
+     `csc.exe /target:exe /win32icon:"app_icon.ico" /out:"ClinicalDecisionSupport.exe" Launcher_v3.cs`
+  4. Structured the folder so that only `ClinicalDecisionSupport.exe` and `app_icon.ico`
+     are visible, hiding backend internals with `attrib +h`.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. HARDCODED PATH DEPENDENCIES ACROSS MACHINES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  When sending the code to coworkers, the application failed to locate database
+  files, FAISS vector indexes, chunks, and frontend assets.
+
+WHAT CAUSED IT (EXACT HARDCODED STRINGS FOUND):
+  - `desktop_main.py:28`        -> `downloads_dir = Path(r"D:\Downloads")`
+  - `backend\app.py:14`         -> `Path(r"D:\Downloads\clinical_cds_app\backend")`
+  - `backend\app.py:15`         -> `downloads_dir = Path(r"D:\Downloads")`
+  - `backend\app.py:236`        -> `frontend_dist = Path(r"D:\Downloads\clinical_cds_app\frontend\dist")`
+  - `backend\auth_db.py:9`      -> `DB_PATH = Path(r"D:\Downloads\clinical_cds_app\clinical_cds.db")`
+  - `medical_clinical_rag.py:27`-> `d_downloads = Path(r"D:\Downloads")`
+
+HOW WE THOUGHT ABOUT IT:
+  Every single file must compute its path dynamically using its own physical
+  location on disk (`__file__`) as the single source of truth.
+
+HOW IT WAS FIXED:
+  1. In `auth_db.py`:
+     `DB_PATH = Path(__file__).parent.resolve() / "clinical_cds.db"`
+  2. In `app.py`:
+     ```python
+     backend_dir = Path(__file__).parent.resolve()
+     repo_root = backend_dir.parent
+     data_dir = repo_root / "data" if (repo_root / "data" / "medical_rag.faiss").exists() else repo_root
+     frontend_dist = repo_root / "frontend" / "dist"
+     ```
+  3. In `medical_clinical_rag.py`:
+     Inspecting both local directory and `data/` subdirectory dynamically.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. ERROR 0x80010135: PATH TOO LONG DURING ZIP EXTRACTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  Coworkers trying to extract `Clinical_Decision_Support_RAG.zip` on Windows
+  received native Windows Shell error `0x80010135: Path too long` on files like
+  `medical_clinical_rag.cpython-314.pyc`.
+
+WHAT CAUSED IT:
+  1. Windows API MAX_PATH Limitation: By default, Windows has a 260-character
+     path limit for Windows Explorer extraction.
+  2. Python's `__pycache__` directories create deep, long filenames such as
+     `.../Clinical_Decision_Support_RAG/backend/__pycache__/app.cpython-314.pyc`.
+  3. When extracted into nested user paths (e.g. `C:\Users\username\Downloads\...`),
+     the cumulative string length surpassed 260 characters.
+
+HOW WE THOUGHT ABOUT IT:
+  Bytecode `.pyc` and `__pycache__` directories are build artifacts generated
+  automatically on runtime. They should never be packaged or distributed.
+
+HOW IT WAS FIXED:
+  1. Cleaned all `__pycache__` and `.pyc` files from the repository:
+     `Get-ChildItem -Path . -Filter "__pycache__" -Recurse | Remove-Item -Recurse -Force`
+  2. Built an automated PowerShell / .NET zip packaging script using
+     `System.IO.Compression.ZipFile` with strict regex exclusions:
+     `if ($relative -notmatch '\.db$|__pycache__|\.pyc$|node_modules') { ... }`
+  3. Kept archive file sizes small (<1MB) and path lengths minimal.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. REPEATED STARTUP CRASHES ON COWORKER PCS (THE 440MB MODEL BLOCKER)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  Even after fixing paths and zip extraction, coworkers running `start.bat`
+  experienced immediate crashes or frozen command prompts.
+
+WHAT CAUSED IT (THE HIDDEN ROOT CAUSE):
+  In `medical_clinical_rag.py`:
+  ```python
+  def _init_encoder(self):
+      model_name = "ncbi/MedCPT-Query-Encoder"
+      self.query_tokenizer = AutoTokenizer.from_pretrained(model_name)
+      self.query_model = AutoModel.from_pretrained(model_name)
+  ```
+  On the developer machine, HuggingFace had already cached the 440MB MedCPT
+  transformer weights in `~/.cache/huggingface`.
+  On coworkers' fresh machines:
+  1. It triggered a synchronous 440MB download over the internet on startup.
+  2. If the coworker had slow internet, strict corporate proxy/firewall, or no
+     HuggingFace connection, it threw an unhandled timeout or SSL error.
+  3. The uncaught exception caused the whole FastAPI backend to crash immediately.
+  4. In standard `start.bat`, pip was trying to install full PyTorch (~2.2 GB)
+     with CUDA drivers, which frequently timed out or ran out of disk space.
+
+HOW WE THOUGHT ABOUT IT:
+  1. We must decouple model setup from application launch.
+  2. Torch should be installed as lightweight CPU-only wheels (~200MB instead of 2.2GB).
+  3. If the deep learning model is not present, the app MUST NOT CRASH — it should
+     automatically fall back to pure BM25Okapi lexical search so users can still
+     query the guidelines offline.
+
+HOW IT WAS FIXED:
+  1. Created `setup_model.py`:
+     - Dedicated script that pre-downloads `ncbi/MedCPT-Query-Encoder` into a local
+       `model_cache/` directory inside the project.
+     - Leaves a `.model_ready` marker file when finished.
+  2. Updated `start.bat`:
+     - Installs CPU-only PyTorch:
+       `pip install torch --index-url https://download.pytorch.org/whl/cpu`
+     - Runs `setup_model.py` once during initialization.
+     - Added `pause` after every potential failure step so users can read errors.
+  3. Updated `medical_clinical_rag.py`:
+     - Configures `TRANSFORMERS_CACHE` and `HF_HOME` to point to `model_cache/`.
+     - Uses `local_files_only=True` to prevent internet calls during runtime.
+     - Wrapped initialization in a safety try/except block. If loading fails,
+       sets `self.encoder_available = False` and sets search weighting `alpha = 0.0`
+       (smooth fallback to BM25).
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. CASUAL CHAT QUERIES CAUSING RAG FAILURE ("HELLO", "WHO ARE YOU?")
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  When users greeted the assistant ("hi", "how are you", "who are you"), the
+  system ran FAISS/BM25 retrieval against NICE CG150 clinical chunks, returned
+  random headache recommendations or said "Evidence is insufficient".
+
+WHAT CAUSED IT:
+  The pipeline had no intent router. Every string was assumed to be a clinical
+  symptom query and passed straight to vector search.
+
+HOW WE THOUGHT ABOUT IT:
+  We need a fast, deterministic pre-retrieval classifier that separates
+  conversational interactions from medical diagnostic queries without adding
+  latency.
+
+HOW IT WAS FIXED:
+  1. Implemented `classify_intent(query)`:
+     Scans query against trigger tokens (`hello`, `hi`, `who are you`, `help`, `thanks`, `bye`, etc.).
+  2. Added dedicated conversational response generator (`get_chat_response`):
+     Explains identity as the CDS Assistant grounded in NICE CG150.
+  3. Returns payload with `intent: "chat"`, bypassing FAISS/BM25 search and
+     clearing clinical warning flags.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. STATIC / FAKE METRICS DISPLAY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  The UI statistics panel displayed hardcoded numbers that never changed
+  regardless of what question was asked.
+
+WHAT CAUSED IT:
+  The hybrid retrieval math was running in Python, but the calculated scores
+  were discarded after ranking and never attached to the API response object.
+
+HOW WE THOUGHT ABOUT IT:
+  Clinicians need to know how strongly the guideline matches their query. We
+  should calculate real metrics per query:
+  - Aggregate Hybrid Confidence Score
+  - Dense Neural Alignment (MedCPT)
+  - Lexical Keyword Match (BM25 normalized)
+  - Retrieved Chunk Count
+
+HOW IT WAS FIXED:
+  1. Added `compute_stats(results, encoder_available)` in `medical_clinical_rag.py`.
+  2. Normalized BM25 unbounded scores against top scores.
+  3. Returned dynamic `stats` JSON object in `/api/query`.
+  4. Updated `App.jsx` to render animated progress bars reflecting actual
+     per-query scores.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. OUT-OF-SCOPE QUERIES RETURNING CONFUSING CLINICAL GUIDELINES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  Asking about non-headache conditions (e.g. "How to treat diabetes?") caused
+  the system to retrieve borderline headache chunks or fail silently.
+
+WHAT CAUSED IT:
+  The vector search finds the mathematical nearest neighbors in NICE CG150
+  even if the query has zero relation to neurology or headaches.
+
+HOW WE THOUGHT ABOUT IT:
+  Clinical safety requires strict scope boundaries. If a question is outside
+  NICE CG150, the system must clearly decline and state its boundaries.
+
+HOW IT WAS FIXED:
+  1. Added `is_in_scope(query)` evaluating medical domain keywords (headache,
+     migraine, tension, cluster, triptan, aura, intracranial, red flags, etc.).
+  2. If out of scope, returns `intent: "out_of_scope"` with a structured
+     redirection explaining covered vs non-covered clinical areas.
+  3. Rendered out-of-scope responses in React with a distinct amber warning badge.
+  4. Added a collapsible "Scope" reference card in the sidebar.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+11. TEXT-WALL RESPONSES & LACK OF SYNTHESIS (INTEGRATING GEMINI LLM)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  Answers were raw concatenated guideline extracts with harsh formatting,
+  making them difficult to read under time pressure.
+
+WHAT CAUSED IT:
+  The initial application was retrieval-only without an active LLM generation step.
+
+HOW WE THOUGHT ABOUT IT:
+  We needed an LLM that:
+  - Generates clear, structured medical summaries
+  - Strictly prevents hallucinations by adhering ONLY to retrieved context
+  - Is free/accessible for internal use
+  - Has zero risk of breaking the app if an API key is missing
+
+HOW IT WAS FIXED:
+  1. Integrated Google Gemini (`gemini-1.5-flash`) via `google-generativeai`.
+  2. Implemented strict clinical prompt engineering:
+     - Output sections: `**Summary**`, `**Key Recommendations**`, `**What to Watch For**`, `**Disclaimer**`.
+     - Explicit rule: "Answer ONLY from provided NICE CG150 evidence. Never invent facts."
+  3. Created dual fallback architecture:
+     - If `GEMINI_API_KEY` is provided (via env or admin UI) -> Generates structured Gemini answer.
+     - If no key is set or API fails -> Generates clean structured template answer.
+  4. Added `react-markdown` + `remark-gfm` to React frontend to render rich
+     typography, bold highlights, and clean bullet lists.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+12. DEAD CITATIONS & LACK OF VERIFIABILITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  Citations like `[NICE CG150, Rec 1.2.3, p.18]` were plain text strings.
+  Clinicians had no direct way to inspect the actual source guideline.
+
+WHAT CAUSED IT:
+  Chunks stored metadata (page number, recommendation ID), but never mapped
+  them into resolvable URL endpoints.
+
+HOW WE THOUGHT ABOUT IT:
+  In evidence-based medicine, trust requires 1-click verification against the
+  official government guideline document.
+
+HOW IT WAS FIXED:
+  1. Created `pdf_url_for(chunk)` appending `#page=N` fragment anchors to the
+     official NICE CG150 PDF URL:
+     `https://www.nice.org.uk/guidance/cg150/resources/...#page=N`
+  2. Added `nice_url` linking to the interactive NICE guidance portal.
+  3. Built an interactive "Guideline Sources" drawer in `App.jsx` with direct
+     `PDF` and `NICE` action buttons opening the exact guideline page in a new tab.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+13. DEAD CHAT HISTORY (UNABLE TO RESUME CONVERSATIONS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  Clicking past queries in the sidebar history did nothing. Follow-up questions
+  had no memory of prior exchanges.
+
+WHAT CAUSED IT:
+  History items had no onClick state dispatchers, and `/api/query` was stateless.
+
+HOW WE THOUGHT ABOUT IT:
+  Clinicians often ask follow-ups ("What if the patient is under 12?", "What is
+  second-line?"). The system must maintain multi-turn conversational context.
+
+HOW IT WAS FIXED:
+  1. In `App.jsx`, clicking any history item reloads the query/answer into the
+     active chat view and initializes `conversationHistory` state.
+  2. Passed `conversation_history` (last 3 exchanges) in `/api/query` payload.
+  3. Backend prepends conversational turns into the LLM context window so
+     Gemini understands pronouns and references to earlier questions.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+14. SCOPE OVER-FILTERING & LOSS OF MULTI-TURN CONVERSATIONAL CONTEXT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  When a user asked a primary question (e.g. "What is the diagnosis for migraine?"),
+  the system answered. But when the user asked a natural clinical follow-up (e.g.
+  "What about in children under 12?" or "How often should they take it?" or "What
+  are the contraindications?"), the system abruptly stopped and said:
+  "This question falls outside the scope of NICE CG150."
+
+WHAT CAUSED IT:
+  1. Isolated Single-Sentence Keyword Check: The scope function `is_in_scope(query)`
+     was strictly evaluating only the current input string in isolation. Short
+     follow-up questions ("What about children under 12?") do not contain the explicit
+     word "headache" or "migraine" in that specific sentence.
+  2. Context Loss in Retrieval: The vector search (`hybrid_search`) was only querying
+     the follow-up text without conversational topic anchors, causing vector similarity
+     scores to drop below confidence thresholds.
+
+HOW WE THOUGHT ABOUT IT:
+  Real clinical dialogue is conversational and iterative. If an active conversation
+  was initiated around a valid clinical topic (like migraine or cluster headache),
+  subsequent questions in that session must inherit the conversational scope and
+  clinical anchors from prior turns.
+
+HOW IT WAS FIXED:
+  1. Context-Aware Scope Evaluation: Updated `is_in_scope(query, conversation_history)`
+     to inspect both the current query AND recent conversation history turns. If the
+     session is an active clinical consultation, follow-ups are automatically recognized
+     as in-scope.
+  2. Contextualized Query Expansion for Vector Retrieval: Added `build_search_query()`
+     which detects short follow-up questions and enriches them with recent clinical
+     subject anchors (e.g. appending `migraine children under 12`) when querying
+     FAISS and BM25.
+  3. Multi-turn Session Memory in Gemini: Upgraded Gemini generation to pass full
+     conversational turns (`[{"role": "user", ...}, {"role": "model", ...}]`) so the
+     model naturally resolves pronouns ("it", "they", "this medication") without confusion.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+15. MISSING "START NEW CHAT" RESET CAPABILITY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  Users could not clear the conversation or start a clean consultation session
+  on a new patient/topic without refreshing the entire browser window or logging out.
+
+WHAT CAUSED IT:
+  There was no dedicated state-reset action or "+ New Chat" button in the navigation.
+
+HOW WE THOUGHT ABOUT IT:
+  All modern AI interfaces (ChatGPT, Claude, Gemini) have a prominent "+ New Chat"
+  button that clears the active context buffer while leaving past history safe in the
+  sidebar database.
+
+HOW IT WAS FIXED:
+  1. Added a prominent `+ Start New Chat` button at the top of the sidebar and in the
+     mobile header.
+  2. Built `startNewChat()` handler in `App.jsx` that clears active messages, resets
+     the multi-turn context memory array, focuses the input box, and restores the
+     clean welcome screen with clickable suggestion chips.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+16. STERILE / UNREADABLE AI MESSAGE FORMATTING (THE STRIPPED MARKDOWN BUG)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  AI responses appeared as plain, robotic walls of text. Even with Gemini API
+  integrated, responses lacked the beautiful typography, tables, and structure of
+  modern AI tools.
+
+WHAT CAUSED IT (THE HIDDEN FORMATTING BUG):
+  1. Legacy Regex Stripping in Backend: `backend/app.py` contained an older utility
+     function `clean_uniform_text_formatting()` that executed regexes like
+     `re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)` and stripped `#` headers.
+     This actively WIPED OUT markdown syntax before sending the response to the frontend!
+  2. Rigid Template System Prompt: The earlier prompt constrained Gemini into a sterile
+     4-bullet box rather than allowing it to write rich, readable medical summaries.
+
+HOW WE THOUGHT ABOUT IT:
+  Clinical decision support requires high-readability visual hierarchy: executive
+  summaries, bolded drug names and dosages, clean bulleted action items, comparison
+  tables for differential diagnosis, and highlighted callout blocks for Red Flags.
+
+HOW IT WAS FIXED:
+  1. Completely removed the destructive text-cleaning regexes from `backend/app.py`.
+  2. Upgraded `GEMINI_SYSTEM_PROMPT` to act as an Elite Clinical AI Assistant:
+     mandates clean markdown headers (`###`), bolded medication names, formatted
+     differential diagnosis tables, and highlighted warning blocks.
+  3. Integrated `react-markdown` + `remark-gfm` with custom Tailwind prose styling,
+     syntax formatting, interactive copy buttons with "Copied!" tooltips, and
+     collapsible source drawers.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+17. ONE-CLICK INSTANT SHARING, LIVE QR CODES & MOBILE-FIRST PRESENTATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT WAS HAPPENING:
+  The user needed to present the application live to professors and investors so
+  they could immediately test it on their own smartphones, without forcing them to
+  install Python, clone repositories, or configure dependencies.
+
+WHAT CAUSED IT:
+  Local web applications run on `localhost:8000`, which is inaccessible from
+  external smartphones or cellular networks unless networked or tunneled.
+
+HOW WE THOUGHT ABOUT IT:
+  We needed a 1-click presentation system embedded directly inside the app:
+  - Generate a real-time, high-resolution QR code right on screen.
+  - Support instant Public Live Internet tunneling (so anyone on 4G/5G can test).
+  - Support Local Wi-Fi network access (for offline presentations on shared Wi-Fi).
+  - Automatically adapt the web layout when opened on a smartphone screen.
+
+HOW IT WAS FIXED:
+  1. Embedded Zero-Config Tunneling in Backend (`/api/tunnel/start`, `/api/network-info`):
+     - Automatic discovery of local LAN IP (`http://10.x.x.x:8000`).
+     - 1-click live public HTTPS tunnel creation via built-in SSH (`localhost.run` / `pinggy` / `cloudflared`).
+     - Server host binding updated to `0.0.0.0` so mobile devices on the network can connect.
+  2. Built "Present / Scan QR" Modal in Frontend:
+     - Prominent button with QR icon in the top navbar.
+     - Live SVG QR Code generation using `qrcode.react`.
+     - Toggle between **Live Public Internet Link**, **Local Wi-Fi Link**, and **Custom Link**.
+     - One-click "Copy Link" button with instant feedback.
+  3. Mobile-Optimized Phone Layout:
+     - Responsive mobile viewport adaptation: fixed thumb-friendly bottom input bar,
+       smooth touch scrolling, slide-over drawer for history and scope, and clean
+       typography tailored for iOS & Android screens.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SUMMARY OF ARCHITECTURAL EVOLUTION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Phase 1 (CLI Prototype) -> Phase 2 (Local Web App) -> Phase 3 (Portable & Robust) -> Phase 4 (Full AI Multi-Turn & Live Mobile Presentation)
+- Replaced hardcoded paths with dynamic `__file__` resolution.
+- Replaced 2.2GB PyTorch with 200MB CPU-only wheels.
+- Replaced raw HuggingFace runtime downloads with `setup_model.py` caching.
+- Replaced text concatenation with Google Gemini 1.5 Multi-Turn LLM synthesis.
+- Replaced single-turn scope gates with Context-Aware Multi-Turn conversational memory.
+- Added 1-Click "+ Start New Chat" conversation clearing.
+- Added 1-Click "Present / Scan QR" with live public tunnels and mobile-first UI.
+- Replaced plain text citations with direct deep-linked PDF page URLs (`#page=N`).
+- Replaced rigid auth with Just-In-Time login & Remember Me persistence.
+================================================================================
+
