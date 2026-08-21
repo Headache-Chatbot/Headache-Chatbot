@@ -7,7 +7,7 @@ import {
   ExternalLink, Eye, EyeOff, AlertTriangle, BookOpen, History,
   Menu, X, Settings, Download, Bot, Stethoscope,
   FileText, BarChart2, Key, RefreshCw, Plus, QrCode, Copy, Check,
-  Wifi, Share2, Info
+  Wifi, Share2, Info, Mic, MicOff, Globe
 } from 'lucide-react';
 
 const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
@@ -15,8 +15,9 @@ const API_BASE = (window.location.hostname === 'localhost' || window.location.ho
 
 const EXAMPLE_QUESTIONS = [
   "What are the red flags for headache requiring urgent referral?",
+  "كيف أشخص الصداع النصفي وما هي العلاجات الوقائية؟",
   "How do I diagnose tension-type headache vs migraine?",
-  "What treatments are recommended for migraine acute relief and prevention?"
+  "ما هي معايير تشخيص الصداع العنقودي حسب إرشادات نايس؟"
 ];
 
 // ── Markdown renderer component (ChatGPT / Claude style) ─────────────────────
@@ -681,8 +682,64 @@ export default function App() {
   const [conversationHistory, setConversationHistory] = useState([]);
   const [showSettings, setShowSettings] = useState(false);
   const [consentLoading, setConsentLoading] = useState(false);
+
+  // ── Voice Recognition (Speech-to-Text) ─────────────────────────────────────
+  const [isRecording, setIsRecording] = useState(false);
+  const [speechLang, setSpeechLang] = useState('ar-SA'); // 'ar-SA' or 'en-US'
+  const recognitionRef = useRef(null);
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
+
+  useEffect(() => {
+    // Check SpeechRecognition browser API support
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      
+      recognition.onresult = (event) => {
+        let transcript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          transcript += event.results[i][0].transcript;
+        }
+        setInput(prev => {
+          const base = prev.trim() ? prev + ' ' : '';
+          return base + transcript;
+        });
+      };
+
+      recognition.onerror = (event) => {
+        console.warn('Speech recognition error:', event.error);
+        setIsRecording(false);
+      };
+
+      recognition.onend = () => {
+        setIsRecording(false);
+      };
+
+      recognitionRef.current = recognition;
+    }
+  }, []);
+
+  function toggleRecording() {
+    if (!recognitionRef.current) {
+      alert('Voice recognition is not supported in this browser. Please try Google Chrome, Edge, or Safari.');
+      return;
+    }
+    if (isRecording) {
+      recognitionRef.current.stop();
+      setIsRecording(false);
+    } else {
+      try {
+        recognitionRef.current.lang = speechLang;
+        recognitionRef.current.start();
+        setIsRecording(true);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  }
 
   useEffect(() => {
     localStorage.setItem('cds_theme', dark ? 'dark' : 'light');
@@ -1090,12 +1147,41 @@ export default function App() {
                           handleSend();
                         }
                       }}
-                      placeholder="Ask any question or follow-up… (Enter to send)"
+                      placeholder={speechLang === 'ar-SA' ? "اسأل أي سؤال أو تحدث صوتياً... (Enter للإرسال)" : "Ask any clinical question or speak… (Enter to send)"}
                       className={`flex-1 resize-none bg-transparent outline-none text-xs sm:text-sm px-2 py-1 leading-relaxed max-h-32
                         ${dark ? 'text-white placeholder-gray-500' : 'text-gray-900 placeholder-gray-400'}`}
                       style={{ minHeight: '36px' }}
                     />
                     
+                    {/* Voice Language Selector */}
+                    <button
+                      type="button"
+                      onClick={() => setSpeechLang(l => l === 'ar-SA' ? 'en-US' : 'ar-SA')}
+                      title="Toggle Speech Recognition Language (Arabic / English)"
+                      className={`shrink-0 px-2 py-1.5 rounded-xl text-xs font-bold transition-all border
+                        ${speechLang === 'ar-SA'
+                          ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                          : 'bg-blue-500/10 text-blue-400 border-blue-500/30'}`}
+                    >
+                      {speechLang === 'ar-SA' ? '🇸🇦 AR' : '🇬🇧 EN'}
+                    </button>
+
+                    {/* Microphone Voice Button */}
+                    <button
+                      type="button"
+                      onClick={toggleRecording}
+                      title={isRecording ? "Listening... click to stop" : "Speak (Voice input)"}
+                      className={`shrink-0 w-9 h-9 rounded-xl flex items-center justify-center transition-all shadow-md
+                        ${isRecording
+                          ? 'bg-red-600 text-white animate-pulse'
+                          : dark
+                            ? 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+                            : 'bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+                    >
+                      {isRecording ? <MicOff size={16} /> : <Mic size={16} />}
+                    </button>
+
+                    {/* Send Button */}
                     <button
                       onClick={handleSend}
                       disabled={loading || !input.trim()}

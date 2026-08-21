@@ -42,9 +42,10 @@ NICE_PDF_URL = "https://www.nice.org.uk/guidance/cg150/resources/headaches-in-ov
 NICE_GUIDANCE_URL = "https://www.nice.org.uk/guidance/cg150"
 
 # ---------------------------------------------------------------------------
-# Conversational / Casual Triggers
+# Conversational / Casual Triggers (English & Arabic)
 # ---------------------------------------------------------------------------
 GREETINGS_MAP = {
+    # English
     "hi": "Hello! How can I help you today? Ask me anything about headaches, clinical symptoms, diagnosis, treatment, or anything else you'd like to discuss.",
     "hello": "Hello! How are you doing today? What would you like to explore or talk about?",
     "hey": "Hey there! How can I assist you right now?",
@@ -55,29 +56,91 @@ GREETINGS_MAP = {
     "thank you": "You're very welcome! Let me know if you need anything else.",
     "thanks": "Anytime! Happy to help. Feel free to ask more questions whenever you're ready.",
     "bye": "Goodbye! Have a wonderful day ahead. Come back whenever you need assistance.",
-    "goodbye": "Goodbye! Take care and feel free to return anytime."
+    "goodbye": "Goodbye! Take care and feel free to return anytime.",
+
+    # Arabic Greetings & Common Phrases
+    "مرحبا": "أهلاً وسهلاً بك! كيف يمكنني مساعدتك اليوم بخصوص الصداع أو الإرشادات الإكلينيكية؟",
+    "مرحبا بك": "أهلاً ومرحباً بك! أنا مساعدك الذكي لتشخيص وعلاج أنواع الصداع طبقاً لإرشادات NICE CG150.",
+    "السلام عليكم": "وعليكم السلام ورحمة الله وبركاته! كيف أستطيع مساعدتك اليوم بخصوص الاستشارات الإكلينيكية وأعراض الصداع؟",
+    "صباح الخير": "صباح النور والسرور! أتمنى لك يوماً جميلاً، كيف يمكنني مساعدتك؟",
+    "مساء الخير": "مساء الخير والعافية! كيف أستطيع خدمتك اليوم؟",
+    "كيف حالك": "أنا بخير والحمد لله! شكراً لسؤالك، كيف صحتك اليوم وكيف أساعدك؟",
+    "من انت": "أنا مساعد طبي ذكي معتمد على إرشادات **NICE CG150** لتشخيص وعلاج اضطرابات الصداع المختلفة.",
+    "ماذا تستطيع ان تفعل": "أستطيع مساعدتك في:\n- تصنيف وتشخيص أنواع الصداع (الصداع التوتري، الصداع النصفي/الشقيقة، الصداع العنقودي، صداع فرط استخدام الأدوية)\n- اقتراح العلاجات الوقائية والطارئة طبقاً للأدلة الطبية\n- رصد العلامات التحذيرية (Red Flags) التي تستدعي التحويل الطارئ",
+    "شكرا": "على الرحب والسعة! لا تتردد في طرح أي سؤال آخر.",
+    "شكرا جزيلا": "عفواً دائماً في خدمتك! أتمنى لك دوام الصحة والعافية.",
+    "مع السلامة": "مع السلامة! دمت في رعاية الله وحفظه، تفضل بالعودة في أي وقت."
 }
 
+def is_arabic(text: str) -> bool:
+    """Detect if text contains Arabic characters."""
+    return bool(re.search(r'[\u0600-\u06FF]', text))
+
+# Arabic medical keyword dictionary to bridge retrieval into English NICE CG150
+ARABIC_MEDICAL_DICT = {
+    "صداع": "headache",
+    "نصفي": "migraine",
+    "شقيقة": "migraine",
+    "توتري": "tension-type headache",
+    "عنقودي": "cluster headache",
+    "ادوية": "medication overuse",
+    "مسكنات": "analgesics triptans",
+    "وقاية": "prophylaxis preventive",
+    "علاج": "treatment management",
+    "حمل": "pregnancy",
+    "اطفال": "children",
+    "احمرار": "eye redness",
+    "غثيان": "nausea vomiting",
+    "هالة": "aura",
+    "خطر": "red flags urgent referral",
+    "تحذيرية": "red flags warning signs",
+    "اورا": "aura visual symptoms",
+    "تربتان": "triptan",
+    "بروبرانولول": "propranolol",
+    "توبيرامات": "topiramate",
+    "باراسيتامول": "paracetamol",
+    "ايبوبروفين": "ibuprofen",
+    "اكسجين": "oxygen"
+}
+
+def translate_arabic_query_for_retrieval(query: str) -> str:
+    """Maps Arabic search keywords to English so FAISS/BM25 finds exact NICE chunks."""
+    if not is_arabic(query):
+        return query
+    keywords = []
+    for ar_term, en_term in ARABIC_MEDICAL_DICT.items():
+        if ar_term in query:
+            keywords.append(en_term)
+    if keywords:
+        return f"{' '.join(keywords)} headache NICE guidelines"
+    return "headache diagnosis treatment NICE guidelines"
+
 def check_conversational_query(query: str) -> Optional[str]:
-    q = query.lower().strip().rstrip("!?.,")
-    if q in GREETINGS_MAP:
-        return GREETINGS_MAP[q]
+    q = query.lower().strip().rstrip("!?.,،")
+    # Normalize Arabic chars
+    q_norm = re.sub(r'[أإآ]', 'ا', q).replace('ة', 'ه').replace('ى', 'ي')
+    
     for key, response in GREETINGS_MAP.items():
-        if q.startswith(key + " ") or q.endswith(" " + key) or q == key:
+        key_norm = re.sub(r'[أإآ]', 'ا', key).replace('ة', 'ه').replace('ى', 'ي')
+        if q_norm == key_norm or q_norm.startswith(key_norm + " ") or q_norm.endswith(" " + key_norm):
             return response
     return None
 
 # ---------------------------------------------------------------------------
-# Red Flag Patterns
+# Red Flag Patterns (English & Arabic)
 # ---------------------------------------------------------------------------
 RED_FLAG_PATTERNS = [
+    # English
     "sudden onset", "thunderclap", "maximum intensity within 5 minutes",
     "new neurological deficit", "impaired consciousness", "recent head trauma",
     "triggered by exercise", "triggered by cough", "valsalva",
     "acute glaucoma", "giant cell arteritis", "scalp tenderness",
     "jaw claudication", "fever with neck stiffness", "immunocompromised",
     "worse on lying down", "postural headache", "new headache over 50",
-    "progressive", "papilloedema", "meningism", "systemic symptoms", "rash"
+    "progressive", "papilloedema", "meningism", "systemic symptoms", "rash",
+    # Arabic Red Flags
+    "مفاجئ", "صداع رعدي", "فقدان الوعي", "تيبس الرقبة", "حمى مع صداع", "شلل",
+    "تغير الرؤية المفاجئ", "فوق سن 50", "بعد اصابة الرأس", "تدهور تدريجي"
 ]
 
 # ---------------------------------------------------------------------------
@@ -281,22 +344,25 @@ def compute_stats(results: List[Dict[str, Any]], encoder_available: bool) -> Dic
     }
 
 # ---------------------------------------------------------------------------
-# Conversational Multi-Turn Gemini LLM generation
+# Conversational Multi-Turn Gemini LLM generation (Bilingual English & Arabic)
 # ---------------------------------------------------------------------------
 GEMINI_SYSTEM_PROMPT = """\
 You are an intelligent, friendly, and expert AI assistant equipped with deep clinical decision support capabilities based on the NICE CG150 Guidelines (Headaches in over 12s: diagnosis and management).
 
-COMMUNICATION GUIDELINES (NATURAL, HELPFUL, PROFESSIONAL):
-1. Talk like a friendly, articulate, and natural modern AI (like ChatGPT or Claude). Never sound robotic.
-2. If the user is having a casual conversation or asking general questions, chat with them warmly, naturally, and helpfully.
-3. When answering clinical or health questions:
+COMMUNICATION & LANGUAGE GUIDELINES (NATURAL, HELPFUL, PROFESSIONAL):
+1. LANGUAGE MATCHING (CRITICAL):
+   - If the user writes or speaks in ARABIC (العربية), ALWAYS reply in clean, fluent, and natural Arabic (الفصحى السلسة). Seamlessly translate medical guidance and citation names naturally into Arabic (e.g. إرشادات نايس NICE CG150).
+   - If the user writes in ENGLISH, reply in English.
+2. Talk like a friendly, articulate, and natural modern AI (like ChatGPT or Claude). Never sound robotic.
+3. If the user is having a casual conversation or asking general questions, chat with them warmly, naturally, and helpfully in their chosen language.
+4. When answering clinical or health questions:
    - Provide a direct, crystal-clear explanation right away.
    - Use beautiful, clean Markdown with bullet points, bold text for key terms and medications, and clear paragraphs.
    - If relevant NICE CG150 evidence is provided, seamlessly incorporate it and cite it naturally, e.g. (NICE CG150 Rec 1.x.x, p.X).
    - NEVER include meta-jargon like "Query Evaluation:", "RAG Analysis:", "System Status:", or technical pipeline labels in your answer.
    - If discussing medication, always remind them to check individualized patient factors, age, contraindications, and local prescribing guidelines.
-4. MULTI-TURN CONTINUITY:
-   - Treat the conversation as a continuous, flowing discussion. When the user asks follow-up questions ("what about in children?", "what are the side effects?", "how to dose it?"), understand what they are referring to from prior messages and answer directly.
+5. MULTI-TURN CONTINUITY:
+   - Treat the conversation as a continuous, flowing discussion. When the user asks follow-up questions ("what about in children?", "what are the side effects?", "ماذا عن الأطفال؟", "كيف نحدد الجرعة؟"), understand what they are referring to from prior messages and answer directly in the active conversation language.
 """
 
 def generate_with_gemini(
@@ -355,8 +421,14 @@ def generate_with_gemini(
         return None
 
 def format_clean_answer(results: List[Dict[str, Any]], query: str) -> str:
-    """Clean, readable answer without meta-headers or jargon."""
+    """Clean, readable answer without meta-headers or jargon (Bilingual English/Arabic)."""
+    in_arabic = is_arabic(query)
+    
     if not results:
+        if in_arabic:
+            return (
+                "أهلاً بك! لم أجد نصاً مطابقاً بشكل مباشر في وثيقة إرشادات NICE CG150 لهذه العبارة المحددة، ولكن يمكنك سؤالي بحرية عن تشخيص الصداع النصفي، الصداع العنقودي، الصداع التوتري، العلامات التحذيرية، أو العلاجات الوقائية والطارئة."
+            )
         return (
             "I'm here to help! While I didn't find a direct matching section in the NICE CG150 guideline document for that specific phrase, please feel free to ask about headache diagnosis, migraine, cluster headache, tension-type headache, red flags, or acute and prophylactic treatments."
         )
@@ -378,9 +450,14 @@ def format_clean_answer(results: List[Dict[str, Any]], query: str) -> str:
         )
         recommendations.append(f"• **{cit}**: {cleaned_text}")
 
-    lines.append("Based on the **NICE CG150 Guidelines**, here are the key recommendations relevant to your question:\n")
-    lines.extend(recommendations[:4])
-    lines.append("\n\n*Note: Clinical guidance is provided for decision support and does not replace individualized patient assessment.*")
+    if in_arabic:
+        lines.append("بناءً على **إرشادات NICE CG150**، إليك أبرز التوصيات الطبية المرتبطة بسؤالك:\n")
+        lines.extend(recommendations[:4])
+        lines.append("\n\n*ملاحظة: هذه الإرشادات مقدمة للدعم الإكلينيكي ولا تغني عن الفحص الطبي المباشر للمريض.*")
+    else:
+        lines.append("Based on the **NICE CG150 Guidelines**, here are the key recommendations relevant to your question:\n")
+        lines.extend(recommendations[:4])
+        lines.append("\n\n*Note: Clinical guidance is provided for decision support and does not replace individualized patient assessment.*")
     return "\n".join(lines)
 
 def validate_citations(answer: str, sources: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -408,6 +485,10 @@ def validate_numbers(answer: str, context: str) -> Dict[str, Any]:
 # Search Query Enrichment
 # ---------------------------------------------------------------------------
 def build_search_query(query: str, conversation_history: Optional[List[Dict]] = None) -> str:
+    # If Arabic, translate key terms to English for vector/BM25 retrieval
+    if is_arabic(query):
+        return translate_arabic_query_for_retrieval(query)
+
     if not conversation_history:
         return query
     

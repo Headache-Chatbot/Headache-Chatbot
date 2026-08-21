@@ -1,4 +1,4 @@
-﻿# Python
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -18,10 +18,10 @@ backend/clinical_cds.db
 # Frontend build output
 frontend/node_modules/
 
-# Data model cache
-*.faiss
-*.pkl
-*.npy
+# Data model cache (keep data/ committed for deployment)
+!data/*.faiss
+!data/*.pkl
+!data/*.npy
 
 # IDE
 .vscode/
