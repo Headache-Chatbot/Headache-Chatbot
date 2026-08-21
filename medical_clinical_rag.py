@@ -401,14 +401,29 @@ def generate_with_gemini(
                     contents.append({"role": "user", "parts": [q_hist]})
                     contents.append({"role": "model", "parts": [a_hist[:1200]]})
 
+        in_ar = is_arabic(query) or any(is_arabic(t.get("query", "")) for t in (conversation_history or []))
+
         if context.strip():
-            current_prompt = (
-                f"Guideline context from NICE CG150:\n\n{context}\n\n"
-                f"User Question: {query}\n\n"
-                f"Please provide a helpful, natural, and well-structured answer."
-            )
+            if in_ar:
+                current_prompt = (
+                    f"وثيقة الإرشادات السريرية NICE CG150:\n\n{context}\n\n"
+                    f"سؤال المستخدم:\n{query}\n\n"
+                    f"التعليمات:\n"
+                    f"- أجب باللغة العربية الفصحى الواضحة والجميلة دائماً.\n"
+                    f"- قدم شرحاً طبياً منظماً ومباشراً مع النقاط والعناوين.\n"
+                    f"- اذكر الإرشادات الطبية المعتمدة (مثل NICE CG150) بشكل طبيعي باللغة العربية."
+                )
+            else:
+                current_prompt = (
+                    f"Guideline context from NICE CG150:\n\n{context}\n\n"
+                    f"User Question: {query}\n\n"
+                    f"Please provide a helpful, natural, and well-structured answer in English."
+                )
         else:
-            current_prompt = query
+            if in_ar:
+                current_prompt = f"الرجاء الإجابة باللغة العربية الفصحى على السؤال التالي:\n{query}"
+            else:
+                current_prompt = query
 
         contents.append({"role": "user", "parts": [current_prompt]})
 

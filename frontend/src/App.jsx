@@ -685,33 +685,35 @@ export default function App() {
 
   // ── Voice Recognition (Speech-to-Text) ─────────────────────────────────────
   const [isRecording, setIsRecording] = useState(false);
-  const [speechLang, setSpeechLang] = useState('ar-SA'); // 'ar-SA' or 'en-US'
+  const [speechLang, setSpeechLang] = useState('ar-EG'); // 'ar-EG' (Arabic - Egypt / Universal) or 'en-US'
   const recognitionRef = useRef(null);
+  const baseInputRef = useRef(''); // Stores input before recording started
   const chatEndRef = useRef(null);
   const inputRef = useRef(null);
 
   useEffect(() => {
-    // Check SpeechRecognition browser API support
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (SpeechRecognition) {
       const recognition = new SpeechRecognition();
-      recognition.continuous = false;
+      recognition.continuous = true;
       recognition.interimResults = true;
       
       recognition.onresult = (event) => {
-        let transcript = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          transcript += event.results[i][0].transcript;
+        let sessionTranscript = '';
+        for (let i = 0; i < event.results.length; ++i) {
+          sessionTranscript += event.results[i][0].transcript;
         }
-        setInput(prev => {
-          const base = prev.trim() ? prev + ' ' : '';
-          return base + transcript;
-        });
+        
+        const base = baseInputRef.current.trim();
+        const fullText = base ? `${base} ${sessionTranscript}` : sessionTranscript;
+        setInput(fullText);
       };
 
       recognition.onerror = (event) => {
         console.warn('Speech recognition error:', event.error);
-        setIsRecording(false);
+        if (event.error !== 'no-speech') {
+          setIsRecording(false);
+        }
       };
 
       recognition.onend = () => {
@@ -723,20 +725,38 @@ export default function App() {
   }, []);
 
   function toggleRecording() {
-    if (!recognitionRef.current) {
-      alert('Voice recognition is not supported in this browser. Please try Google Chrome, Edge, or Safari.');
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert('التعرف على الصوت غير مدعوم في هذا المتصفح. يرجى استخدام متصفح Chrome أو Edge أو Safari على الهاتف أو الكمبيوتر.');
       return;
     }
+
     if (isRecording) {
-      recognitionRef.current.stop();
+      try {
+        recognitionRef.current?.stop();
+      } catch (e) {}
       setIsRecording(false);
     } else {
       try {
-        recognitionRef.current.lang = speechLang;
-        recognitionRef.current.start();
-        setIsRecording(true);
+        baseInputRef.current = input;
+        if (recognitionRef.current) {
+          recognitionRef.current.lang = speechLang;
+          recognitionRef.current.start();
+          setIsRecording(true);
+        }
       } catch (err) {
-        console.error(err);
+        console.error('Error starting speech recognition:', err);
+        // If already started, restart
+        try {
+          recognitionRef.current?.stop();
+          setTimeout(() => {
+            if (recognitionRef.current) {
+              recognitionRef.current.lang = speechLang;
+              recognitionRef.current.start();
+              setIsRecording(true);
+            }
+          }, 200);
+        } catch (e) {}
       }
     }
   }
