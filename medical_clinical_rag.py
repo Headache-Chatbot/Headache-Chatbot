@@ -376,7 +376,15 @@ def generate_with_gemini(
         import google.generativeai as genai
         genai.configure(api_key=api_key)
         
-        model_names = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp", "gemini-pro"]
+        model_names = [
+            "gemini-3.6-flash",
+            "gemini-flash-latest",
+            "gemini-flash-lite-latest",
+            "gemini-pro-latest",
+            "gemini-2.5-flash-lite",
+            "gemini-2.5-pro",
+            "gemini-1.5-flash"
+        ]
         model = None
         for name in model_names:
             try:
@@ -390,7 +398,7 @@ def generate_with_gemini(
                 continue
 
         if model is None:
-            model = genai.GenerativeModel("gemini-1.5-flash")
+            model = genai.GenerativeModel("gemini-3.6-flash")
 
         contents = []
         if conversation_history:
