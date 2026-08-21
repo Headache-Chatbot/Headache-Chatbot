@@ -22,6 +22,7 @@ frontend/node_modules/
 !data/*.faiss
 !data/*.pkl
 !data/*.npy
+model_cache/
 
 # IDE
 .vscode/
