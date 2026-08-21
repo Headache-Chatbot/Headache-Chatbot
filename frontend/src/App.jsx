@@ -7,7 +7,7 @@ import {
   ExternalLink, Eye, EyeOff, AlertTriangle, BookOpen, History,
   Menu, X, Settings, Download, Bot, Stethoscope,
   FileText, BarChart2, Key, RefreshCw, Plus, QrCode, Copy, Check,
-  Wifi, Share2, Info, Mic, MicOff, Globe
+  Wifi, Share2, Info, Mic, MicOff, Globe, Trash2, UserX
 } from 'lucide-react';
 
 const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
@@ -806,6 +806,69 @@ export default function App() {
     inputRef.current?.focus();
   }
 
+  // Incognito Mode State
+  const [incognito, setIncognito] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  async function deleteSingleChat(queryId, e) {
+    e.stopPropagation();
+    if (!user) return;
+    try {
+      await fetch(`${API_BASE}/api/user/delete-chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: user.id, query_id: queryId })
+      });
+      setHistory(h => h.filter(item => item.id !== queryId));
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function clearAllHistory() {
+    if (!user) return;
+    if (!window.confirm('Are you sure you want to clear all your chat history? This cannot be undone.')) return;
+    try {
+      await fetch(`${API_BASE}/api/user/clear-history`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: user.id })
+      });
+      setHistory([]);
+      setMessages([]);
+      setConversationHistory([]);
+    } catch (err) {
+      console.error(err);
+    }
+  }
+
+  async function handleDeleteAccount(e) {
+    e.preventDefault();
+    if (!user) return;
+    setDeleteLoading(true);
+    setDeleteError('');
+    try {
+      const res = await fetch(`${API_BASE}/api/user/delete-account`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id: user.id, password: deletePassword })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Failed to delete account.');
+      setShowDeleteModal(false);
+      setShowSettings(false);
+      handleLogout();
+      alert('Your account and all associated data have been permanently deleted.');
+    } catch (err) {
+      setDeleteError(err.message);
+    } finally {
+      setDeleteLoading(false);
+    }
+  }
+
   async function sendQuery(queryText) {
     if (!queryText.trim()) return;
     const q = queryText.trim();
@@ -818,8 +881,9 @@ export default function App() {
     try {
       const body = {
         query: q,
-        user_id: user?.id || null,
-        username: user?.username || 'Anonymous',
+        // In incognito mode, do not associate with user ID so it never saves to database
+        user_id: incognito ? null : (user?.id || null),
+        username: incognito ? 'Incognito User' : (user?.username || 'Anonymous'),
         conversation_history: conversationHistory.slice(-4),
       };
       
@@ -836,7 +900,7 @@ export default function App() {
       // Update multi-turn conversation context
       setConversationHistory(h => [...h, { query: q, answer: data.answer }].slice(-6));
       
-      if (user) fetchHistory();
+      if (user && !incognito) fetchHistory();
     } catch (err) {
       setMessages(m => [...m, {
         role: 'assistant', intent: 'chat',
@@ -851,7 +915,7 @@ export default function App() {
   function handleSend() {
     const q = input.trim();
     if (!q) return;
-    if (!user) {
+    if (!user && !incognito) {
       setPendingQuery(q);
       setShowAuth(true);
       return;
@@ -949,6 +1013,18 @@ export default function App() {
 
         {/* Header Right Actions */}
         <div className="flex items-center gap-2">
+          {/* Incognito Mode Toggle Button */}
+          <button
+            onClick={() => setIncognito(i => !i)}
+            title={incognito ? "Incognito Active (Chats not saved to history). Click to return to normal." : "Go Incognito (Chats won't be saved)"}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold border transition-all shadow-sm
+              ${incognito
+                ? 'bg-purple-900/40 text-purple-300 border-purple-500/60 ring-2 ring-purple-500/30 animate-pulse'
+                : 'bg-gray-800/40 hover:bg-gray-800 text-gray-400 border-gray-700'}`}>
+            <span>🕵️</span>
+            <span className="hidden sm:inline">{incognito ? 'Incognito ON' : 'Incognito'}</span>
+          </button>
+
           {/* Top New Chat on Mobile */}
           <button
             onClick={startNewChat}
@@ -996,7 +1072,7 @@ export default function App() {
         </div>
       </header>
 
-      {/* Settings Menu Dropdown (Clean, non-breaking toggle) */}
+      {/* Settings Menu Dropdown (Clean, non-breaking toggle + Account Deletion) */}
       {showSettings && user && (
         <div className={`absolute right-4 top-14 z-30 w-80 rounded-2xl shadow-2xl border p-4 text-sm animate-in fade-in
           ${dark ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-200 text-gray-900'}`}>
@@ -1004,7 +1080,7 @@ export default function App() {
             <span className="font-bold text-xs uppercase tracking-wider text-teal-400">Account Preferences</span>
             <button onClick={() => setShowSettings(false)}><X size={15} /></button>
           </div>
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">
               <div className="flex-1">
                 <p className="text-xs font-semibold">Data Improvement Sharing</p>
@@ -1012,7 +1088,6 @@ export default function App() {
                   Allow anonymized query data for AI clinical evaluation
                 </p>
               </div>
-              {/* Fixed, rock-solid toggle switch */}
               <button
                 type="button"
                 onClick={toggleConsent}
@@ -1028,6 +1103,74 @@ export default function App() {
                 />
               </button>
             </div>
+
+            {/* Clear History Button in Settings */}
+            <div className="pt-2 border-t border-gray-700/40">
+              <button
+                type="button"
+                onClick={clearAllHistory}
+                className="w-full py-2 px-3 rounded-xl text-xs font-semibold bg-gray-800 hover:bg-gray-750 text-gray-300 flex items-center justify-center gap-2 border border-gray-700 transition-colors"
+              >
+                <Trash2 size={13} className="text-amber-400" />
+                <span>Clear All Chat History</span>
+              </button>
+            </div>
+
+            {/* Delete Account Section */}
+            <div className="pt-2 border-t border-gray-700/40">
+              <button
+                type="button"
+                onClick={() => { setShowSettings(false); setShowDeleteModal(true); }}
+                className="w-full py-2 px-3 rounded-xl text-xs font-semibold bg-red-950/40 hover:bg-red-900/60 text-red-300 flex items-center justify-center gap-2 border border-red-800/40 transition-colors"
+              >
+                <UserX size={13} />
+                <span>Delete My Account</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Account Password Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-md p-4 animate-in fade-in">
+          <div className={`w-full max-w-sm rounded-2xl shadow-2xl p-6 border ${dark ? 'bg-gray-900 border-red-800/60 text-white' : 'bg-white border-red-300 text-gray-900'}`}>
+            <div className="flex items-center gap-2 mb-3 text-red-400 font-bold text-sm">
+              <AlertTriangle size={18} />
+              <span>Delete Account & Data</span>
+            </div>
+            <p className={`text-xs mb-4 leading-relaxed ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+              Please enter your password to confirm. This will <strong>permanently delete</strong> your account, history, and all stored data.
+            </p>
+            <form onSubmit={handleDeleteAccount} className="space-y-3">
+              <input
+                type="password"
+                placeholder="Enter your account password"
+                value={deletePassword}
+                onChange={e => setDeletePassword(e.target.value)}
+                required
+                autoFocus
+                className={`w-full px-3 py-2.5 rounded-xl border text-sm outline-none focus:ring-2 focus:ring-red-500
+                  ${dark ? 'bg-gray-800 border-gray-700 text-white' : 'bg-white border-gray-300 text-gray-900'}`}
+              />
+              {deleteError && <p className="text-red-400 text-xs font-semibold">{deleteError}</p>}
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => { setShowDeleteModal(false); setDeletePassword(''); setDeleteError(''); }}
+                  className={`flex-1 py-2 rounded-xl text-xs font-semibold border ${dark ? 'border-gray-700 bg-gray-800 hover:bg-gray-700 text-gray-300' : 'border-gray-300 bg-gray-100 hover:bg-gray-200 text-gray-700'}`}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={deleteLoading || !deletePassword}
+                  className="flex-1 py-2 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-500 text-white disabled:opacity-50 transition-all shadow-md"
+                >
+                  {deleteLoading ? 'Deleting…' : 'Delete Account'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -1063,16 +1206,27 @@ export default function App() {
           {/* Scope Card */}
           <ScopeCard dark={dark} />
 
-          {/* History Header */}
+          {/* History Header & Clear Action */}
           <div className="flex items-center justify-between mb-2 mt-1 px-1">
             <span className={`text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
               <History size={13} /> Chat History
             </span>
-            {user && (
-              <button onClick={fetchHistory} title="Refresh History" className="text-gray-500 hover:text-teal-400">
-                <RefreshCw size={12} />
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {user && history.length > 0 && (
+                <button
+                  onClick={clearAllHistory}
+                  title="Clear all chat history"
+                  className="text-gray-500 hover:text-red-400 transition-colors"
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
+              {user && (
+                <button onClick={fetchHistory} title="Refresh History" className="text-gray-500 hover:text-teal-400">
+                  <RefreshCw size={12} />
+                </button>
+              )}
+            </div>
           </div>
 
           {!user && (
@@ -1081,19 +1235,31 @@ export default function App() {
             </div>
           )}
 
-          {/* History List */}
+          {/* History List with Per-Chat Delete Button */}
           <div className="space-y-1 flex-1 overflow-y-auto pr-1">
             {history.slice(0, 40).map((h, i) => (
-              <button key={i} onClick={() => handleHistoryClick(h)}
-                className={`w-full text-left px-3 py-2 rounded-xl text-xs group transition-all
-                  ${dark ? 'hover:bg-gray-800 text-gray-300' : 'hover:bg-gray-100 text-gray-700'}`}>
-                <p className="truncate font-medium group-hover:text-teal-400 transition-colors">
-                  {h.query}
-                </p>
-                <p className={`text-[10px] mt-0.5 font-mono ${dark ? 'text-gray-500' : 'text-gray-400'}`}>
-                  {h.timestamp?.slice(0, 16)}
-                </p>
-              </button>
+              <div
+                key={h.id || i}
+                onClick={() => handleHistoryClick(h)}
+                className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs group cursor-pointer transition-all
+                  ${dark ? 'hover:bg-gray-800 text-gray-300' : 'hover:bg-gray-100 text-gray-700'}`}
+              >
+                <div className="flex-1 min-w-0 pr-2">
+                  <p className="truncate font-medium group-hover:text-teal-400 transition-colors">
+                    {h.query}
+                  </p>
+                  <p className={`text-[10px] mt-0.5 font-mono ${dark ? 'text-gray-500' : 'text-gray-400'}`}>
+                    {h.timestamp?.slice(0, 16)}
+                  </p>
+                </div>
+                <button
+                  onClick={(e) => deleteSingleChat(h.id, e)}
+                  title="Delete this chat"
+                  className="opacity-0 group-hover:opacity-100 p-1 text-gray-500 hover:text-red-400 transition-all"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
             ))}
           </div>
 

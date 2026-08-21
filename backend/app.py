@@ -175,6 +175,17 @@ class ConsentRequest(BaseModel):
     user_id: int
     share_for_training: bool
 
+class DeleteAccountRequest(BaseModel):
+    user_id: int
+    password: str
+
+class ClearHistoryRequest(BaseModel):
+    user_id: int
+
+class DeleteChatRequest(BaseModel):
+    user_id: int
+    query_id: int
+
 class BanToggleRequest(BaseModel):
     user_id: int
     is_banned: bool
@@ -305,6 +316,24 @@ def login_endpoint(req: LoginRequest):
 def update_consent_endpoint(req: ConsentRequest):
     auth_db.update_user_consent(req.user_id, req.share_for_training)
     return {"success": True, "share_for_training": req.share_for_training}
+
+@app.post("/api/user/delete-account")
+def delete_account_endpoint(req: DeleteAccountRequest):
+    try:
+        auth_db.delete_user_account(req.user_id, req.password)
+        return {"success": True, "message": "Account and associated data deleted successfully."}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/user/clear-history")
+def clear_history_endpoint(req: ClearHistoryRequest):
+    auth_db.clear_user_history(req.user_id)
+    return {"success": True, "message": "Chat history cleared successfully."}
+
+@app.post("/api/user/delete-chat")
+def delete_single_chat_endpoint(req: DeleteChatRequest):
+    auth_db.delete_single_chat(req.user_id, req.query_id)
+    return {"success": True, "message": "Chat deleted successfully."}
 
 @app.get("/api/user/history/{user_id}")
 def get_history_endpoint(user_id: int):

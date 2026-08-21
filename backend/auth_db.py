@@ -187,6 +187,37 @@ def get_user_history(user_id: int) -> List[Dict[str, Any]]:
             result.append(d)
         return result
 
+def delete_user_account(user_id: int, password: str) -> bool:
+    """Deletes a user account and all their query history after verifying password."""
+    user = get_user_by_id(user_id)
+    if not user:
+        raise ValueError("User not found.")
+    if user["password_hash"] != hash_password(password):
+        raise ValueError("Incorrect password. Account deletion aborted.")
+    
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM query_history WHERE user_id = ?", (user_id,))
+        cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+    return True
+
+def clear_user_history(user_id: int) -> bool:
+    """Clears all history for a specific user."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM query_history WHERE user_id = ?", (user_id,))
+        conn.commit()
+    return True
+
+def delete_single_chat(user_id: int, query_id: int) -> bool:
+    """Deletes a specific chat item from query history."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM query_history WHERE id = ? AND user_id = ?", (query_id, user_id))
+        conn.commit()
+    return True
+
 def get_all_users_for_admin() -> List[Dict[str, Any]]:
     with get_db() as conn:
         cursor = conn.cursor()
