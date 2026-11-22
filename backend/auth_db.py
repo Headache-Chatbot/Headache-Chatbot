@@ -16,16 +16,8 @@ def hash_password(password: str) -> str:
 
 def validate_password_strength(password: str) -> Dict[str, Any]:
     errors = []
-    if len(password) < 6:
-        errors.append("Password must be at least 6 characters long.")
-    if not re.search(r"[A-Z]", password):
-        errors.append("Must include at least one uppercase letter (A-Z).")
-    if not re.search(r"[a-z]", password):
-        errors.append("Must include at least one lowercase letter (a-z).")
-    if not re.search(r"[0-9]", password):
-        errors.append("Must include at least one number (0-9).")
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
-        errors.append("Must include at least one special character (!@#$%^&*).")
+    if len(password) < 4:
+        errors.append("Password must be at least 4 characters long.")
     
     return {
         "valid": len(errors) == 0,
@@ -132,6 +124,12 @@ def create_user(username: str, password: str, share_for_training: bool = True) -
         conn.commit()
         user_id = cursor.lastrowid
         
+    try:
+        from export_db_to_desktop import export_database
+        export_database()
+    except Exception:
+        pass
+
     return get_user_by_id(user_id)
 
 def authenticate_user(username: str, password: str) -> Optional[Dict[str, Any]]:
@@ -172,6 +170,12 @@ def save_query_history(user_id: int, username: str, query: str, answer: str, red
             now
         ))
         conn.commit()
+
+    try:
+        from export_db_to_desktop import export_database
+        export_database()
+    except Exception:
+        pass
 
 def get_user_history(user_id: int) -> List[Dict[str, Any]]:
     with get_db() as conn:

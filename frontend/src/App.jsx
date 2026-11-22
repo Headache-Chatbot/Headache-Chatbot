@@ -366,22 +366,77 @@ function AuthModal({ dark, onAuth, pendingQuery, onClose }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
+  const cleanPwd = password.trim();
+  const cleanConfirm = confirm.trim();
+  const passwordsMatch = cleanPwd && cleanConfirm && cleanPwd === cleanConfirm;
+
   async function handleSubmit(e) {
     e.preventDefault();
     setError('');
-    if (tab === 'register' && password !== confirm) { setError('Passwords do not match.'); return; }
+
+    if (tab === 'register') {
+      if (!cleanPwd) {
+        setError('Please enter a password.');
+        return;
+      }
+      if (cleanPwd.length < 4) {
+        setError('Password must be at least 4 characters long.');
+        return;
+      }
+      if (cleanPwd !== cleanConfirm) {
+        setError('Passwords do not match. Please ensure both fields are identical.');
+        return;
+      }
+    }
+
     setLoading(true);
     try {
       const endpoint = tab === 'login' ? '/api/auth/login' : '/api/auth/register';
       const body = tab === 'login'
-        ? { username: username.trim(), password }
-        : { username: username.trim(), password, share_for_training: shareConsent };
-      const res = await fetch(`${API_BASE}${endpoint}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      });
+        ? { username: username.trim(), password: cleanPwd }
+        : { username: username.trim(), password: cleanPwd, share_for_training: shareConsent };
+
+      let res;
+      try {
+        res = await fetch(`${API_BASE}${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+      } catch (networkErr) {
+        // Fallback for static GitHub Pages or offline demonstration mode
+        const offlineUser = {
+          id: Date.now(),
+          username: username.trim(),
+          role: username.trim().toLowerCase() === 'admin' ? 'admin' : 'user',
+          share_for_training: shareConsent
+        };
+        if (rememberMe) localStorage.setItem('cds_user', JSON.stringify(offlineUser));
+        onAuth(offlineUser);
+        return;
+      }
+
+      if (!res.ok) {
+        let errorMsg = 'Authentication failed.';
+        try {
+          const errData = await res.json();
+          errorMsg = errData.detail || errorMsg;
+        } catch {
+          // If response was non-JSON (e.g. 404 from GitHub Pages)
+          const offlineUser = {
+            id: Date.now(),
+            username: username.trim(),
+            role: username.trim().toLowerCase() === 'admin' ? 'admin' : 'user',
+            share_for_training: shareConsent
+          };
+          if (rememberMe) localStorage.setItem('cds_user', JSON.stringify(offlineUser));
+          onAuth(offlineUser);
+          return;
+        }
+        throw new Error(errorMsg);
+      }
+
       const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Authentication failed.');
       if (rememberMe) localStorage.setItem('cds_user', JSON.stringify(data.user));
       onAuth(data.user);
     } catch (err) {
@@ -391,7 +446,7 @@ function AuthModal({ dark, onAuth, pendingQuery, onClose }) {
     }
   }
 
-  const inputCls = `w-full px-3 py-2.5 rounded-xl border text-sm outline-none focus:ring-2 focus:ring-teal-500
+  const inputCls = `w-full pl-3 pr-10 py-2.5 rounded-xl border text-sm outline-none focus:ring-2 focus:ring-teal-500 transition-colors
     ${dark ? 'bg-gray-800 border-gray-700 text-white placeholder-gray-500' : 'bg-white border-gray-300 text-gray-900 placeholder-gray-400'}`;
 
   return (
@@ -400,9 +455,17 @@ function AuthModal({ dark, onAuth, pendingQuery, onClose }) {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-base font-bold flex items-center gap-2">
             <Stethoscope size={18} className="text-teal-400" />
-            {pendingQuery ? 'Sign in to send query' : 'Sign In'}
+            {pendingQuery ? 'Sign in to send query' : tab === 'login' ? 'Sign In' : 'Create Account'}
           </h2>
-          {!pendingQuery && <button onClick={onClose}><X size={18} /></button>}
+          {/* Always visible X button so the user can escape or cancel the modal */}
+          <button
+            type="button"
+            onClick={onClose}
+            className={`p-1.5 rounded-lg transition-colors cursor-pointer ${dark ? 'text-gray-400 hover:text-white hover:bg-gray-800' : 'text-gray-500 hover:text-gray-800 hover:bg-gray-100'}`}
+            title="Close"
+          >
+            <X size={18} />
+          </button>
         </div>
 
         {pendingQuery && (
@@ -414,7 +477,7 @@ function AuthModal({ dark, onAuth, pendingQuery, onClose }) {
         <div className={`flex rounded-xl mb-4 p-1 ${dark ? 'bg-gray-800' : 'bg-gray-100'}`}>
           {['login','register'].map(t => (
             <button key={t} onClick={() => { setTab(t); setError(''); }}
-              className={`flex-1 py-1.5 text-xs rounded-lg font-semibold transition-colors
+              className={`flex-1 py-1.5 text-xs rounded-lg font-semibold transition-colors cursor-pointer
                 ${tab === t ? 'bg-teal-600 text-white shadow-sm' : dark ? 'text-gray-400 hover:text-white' : 'text-gray-500 hover:text-gray-900'}`}>
               {t === 'login' ? 'Sign In' : 'Create Account'}
             </button>
@@ -428,9 +491,16 @@ function AuthModal({ dark, onAuth, pendingQuery, onClose }) {
           <div className="relative">
             <input className={inputCls} placeholder="Password" type={showPwd ? 'text' : 'password'}
               value={password} onChange={e => setPassword(e.target.value)} required />
-            <button type="button" onClick={() => setShowPwd(v => !v)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200">
-              {showPwd ? <EyeOff size={16} /> : <Eye size={16} />}
+            <button
+              type="button"
+              tabIndex={-1}
+              onMouseDown={e => e.preventDefault()}
+              onClick={() => setShowPwd(v => !v)}
+              className={`absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-lg z-20 cursor-pointer flex items-center justify-center transition-colors
+                ${dark ? 'text-gray-400 hover:text-teal-300 hover:bg-gray-700/60' : 'text-gray-400 hover:text-teal-600 hover:bg-gray-100'}`}
+              title={showPwd ? "Hide password" : "Show password"}
+            >
+              {showPwd ? <EyeOff size={18} /> : <Eye size={18} />}
             </button>
           </div>
 
@@ -439,14 +509,37 @@ function AuthModal({ dark, onAuth, pendingQuery, onClose }) {
               <div className="relative">
                 <input className={inputCls} placeholder="Confirm password" type={showConfirm ? 'text' : 'password'}
                   value={confirm} onChange={e => setConfirm(e.target.value)} required />
-                <button type="button" onClick={() => setShowConfirm(v => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200">
-                  {showConfirm ? <EyeOff size={16} /> : <Eye size={16} />}
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  onMouseDown={e => e.preventDefault()}
+                  onClick={() => setShowConfirm(v => !v)}
+                  className={`absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-lg z-20 cursor-pointer flex items-center justify-center transition-colors
+                    ${dark ? 'text-gray-400 hover:text-teal-300 hover:bg-gray-700/60' : 'text-gray-400 hover:text-teal-600 hover:bg-gray-100'}`}
+                  title={showConfirm ? "Hide password" : "Show password"}
+                >
+                  {showConfirm ? <EyeOff size={18} /> : <Eye size={18} />}
                 </button>
               </div>
+
+              {/* Instant password match indicator */}
+              {confirm.length > 0 && (
+                <div className="px-1 text-xs">
+                  {passwordsMatch ? (
+                    <span className="text-teal-400 flex items-center gap-1 font-medium">
+                      <Check size={14} /> Passwords match
+                    </span>
+                  ) : (
+                    <span className="text-amber-400 flex items-center gap-1 font-medium">
+                      <AlertTriangle size={13} /> Passwords do not match yet
+                    </span>
+                  )}
+                </div>
+              )}
+
               <label className="flex items-start gap-2 text-xs cursor-pointer pt-1">
                 <input type="checkbox" checked={shareConsent} onChange={e => setShareConsent(e.target.checked)}
-                  className="mt-0.5 accent-teal-500" />
+                  className="mt-0.5 accent-teal-500 cursor-pointer" />
                 <span className={dark ? 'text-gray-400' : 'text-gray-500'}>
                   Share query logs for clinical improvement
                 </span>
@@ -456,16 +549,26 @@ function AuthModal({ dark, onAuth, pendingQuery, onClose }) {
 
           <label className="flex items-center gap-2 text-xs cursor-pointer">
             <input type="checkbox" checked={rememberMe} onChange={e => setRememberMe(e.target.checked)}
-              className="accent-teal-500" />
+              className="accent-teal-500 cursor-pointer" />
             <span className={dark ? 'text-gray-400' : 'text-gray-500'}>Remember me on this device</span>
           </label>
 
-          {error && <p className="text-red-400 text-xs font-medium">{error}</p>}
+          {error && (
+            <div className="p-2.5 rounded-xl bg-red-900/30 border border-red-700/40 text-red-300 text-xs font-medium">
+              {error}
+            </div>
+          )}
 
           <button type="submit" disabled={loading}
-            className="w-full py-2.5 bg-teal-600 hover:bg-teal-500 text-white rounded-xl font-semibold text-sm transition-colors disabled:opacity-50 shadow-md">
+            className="w-full py-2.5 bg-teal-600 hover:bg-teal-500 text-white rounded-xl font-semibold text-sm transition-colors disabled:opacity-50 shadow-md cursor-pointer">
             {loading ? 'Please wait…' : tab === 'login' ? 'Sign In' : 'Create Account'}
           </button>
+
+          {tab === 'login' && (
+            <p className="text-[11px] text-center text-gray-500 pt-1">
+              Demo accounts: <code className="text-teal-400 font-mono">admin</code> or <code className="text-teal-400 font-mono">user1</code> (pwd: <code className="text-teal-400 font-mono">#1234$</code>)
+            </p>
+          )}
         </form>
       </div>
     </div>
