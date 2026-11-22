@@ -10,8 +10,17 @@ import {
   Wifi, Share2, Info, Mic, MicOff, Globe, Trash2, UserX
 } from 'lucide-react';
 
-const API_BASE = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-  ? 'http://127.0.0.1:8000' : '';
+function getApiBase() {
+  if (typeof window === 'undefined') return '';
+  const saved = localStorage.getItem('cds_backend_url');
+  if (saved && saved.trim()) return saved.trim().replace(/\/+$/, '');
+  if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+    return 'http://127.0.0.1:8000';
+  }
+  return '';
+}
+
+let API_BASE = getApiBase();
 
 const EXAMPLE_QUESTIONS = [
   "What are the red flags for headache requiring urgent referral?",
@@ -770,6 +779,8 @@ function AdminPanel({ dark, user }) {
 // ── Main App Root Component ──────────────────────────────────────────────────
 export default function App() {
   const [dark, setDark] = useState(() => localStorage.getItem('cds_theme') !== 'light');
+  const [customBackend, setCustomBackend] = useState(() => localStorage.getItem('cds_backend_url') || '');
+  const [apiBase, setApiBase] = useState(() => getApiBase());
   const [user, setUser] = useState(() => {
     try { return JSON.parse(localStorage.getItem('cds_user') || 'null'); } catch { return null; }
   });
@@ -981,6 +992,19 @@ export default function App() {
     setInput('');
     setLoading(true);
 
+    const activeApi = apiBase || getApiBase();
+
+    if (!activeApi && window.location.hostname.includes('github.io')) {
+      setMessages(m => [...m, {
+        role: 'assistant',
+        intent: 'chat',
+        answer: `⚠️ **AI Backend Not Connected**\n\nGitHub Pages only hosts the website interface. To get real AI clinical answers with NICE CG150 guideline citations:\n\n1. Double-click **\`Start_Free_Online_Tunnel.bat\`** on your desktop, OR deploy to **Hugging Face Spaces**.\n2. Click the **⚙️ Settings** icon in the top-right navbar and paste your free backend URL.\n\n*If you are running the app locally on your PC, simply open http://127.0.0.1:8000.*`,
+        red_flags: [], sources: [], stats: {}
+      }]);
+      setLoading(false);
+      return;
+    }
+
     try {
       const body = {
         query: q,
@@ -990,13 +1014,27 @@ export default function App() {
         conversation_history: conversationHistory.slice(-4),
       };
       
-      const res = await fetch(`${API_BASE}/api/query`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      const res = await fetch(`${activeApi}/api/query`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Bypass-Tunnel-Reminder': 'true'
+        },
         body: JSON.stringify(body)
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail || 'Request failed.');
       
+      if (!res.ok) {
+        let errDetail = 'Request failed.';
+        try {
+          const errData = await res.json();
+          errDetail = errData.detail || errDetail;
+        } catch {
+          errDetail = `Server returned status ${res.status}. Please check your backend connection.`;
+        }
+        throw new Error(errDetail);
+      }
+      
+      const data = await res.json();
       const assistantMsg = { role: 'assistant', ...data };
       setMessages(m => [...m, assistantMsg]);
       
@@ -1007,7 +1045,7 @@ export default function App() {
     } catch (err) {
       setMessages(m => [...m, {
         role: 'assistant', intent: 'chat',
-        answer: `An error occurred: ${err.message}`,
+        answer: `⚠️ Could not reach AI Backend: ${err.message}\n\nPlease verify your backend server URL in **⚙️ Settings**.`,
         red_flags: [], sources: [], stats: {}
       }]);
     } finally {
@@ -1149,13 +1187,16 @@ export default function App() {
             {dark ? <Sun size={17} /> : <Moon size={17} />}
           </button>
 
+          {/* Settings Button (Always accessible) */}
+          <button onClick={() => setShowSettings(o => !o)}
+            title="Settings & Backend Connection"
+            className={`p-2 rounded-xl hover:bg-gray-700/30 text-gray-400 hover:text-white transition-colors cursor-pointer ${showSettings ? 'bg-gray-700/40 text-teal-400' : ''}`}>
+            <Settings size={17} />
+          </button>
+
           {/* User Status / Auth */}
           {user ? (
             <>
-              <button onClick={() => setShowSettings(o => !o)}
-                className={`p-2 rounded-xl hover:bg-gray-700/30 text-gray-400 hover:text-white ${showSettings ? 'bg-gray-700/40 text-teal-400' : ''}`}>
-                <Settings size={17} />
-              </button>
               <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-teal-700/20 text-teal-300 text-xs font-medium border border-teal-700/30">
                 {user.role === 'admin' ? <Shield size={12} className="text-purple-400" /> : <User size={12} />}
                 <span>{user.username}</span>
@@ -1176,12 +1217,51 @@ export default function App() {
       </header>
 
       {/* Settings Menu Dropdown (Clean, non-breaking toggle + Account Deletion) */}
-      {showSettings && user && (
+      {showSettings && (
         <div className={`absolute right-4 top-14 z-30 w-80 rounded-2xl shadow-2xl border p-4 text-sm animate-in fade-in
           ${dark ? 'bg-gray-900 border-gray-700 text-white' : 'bg-white border-gray-200 text-gray-900'}`}>
           <div className="flex items-center justify-between mb-3 pb-2 border-b border-gray-700/40">
-            <span className="font-bold text-xs uppercase tracking-wider text-teal-400">Account Preferences</span>
+            <span className="font-bold text-xs uppercase tracking-wider text-teal-400">Preferences & Server</span>
             <button onClick={() => setShowSettings(false)}><X size={15} /></button>
+          </div>
+
+          {/* Backend AI Server URL Configuration */}
+          <div className="mb-3 pb-3 border-b border-gray-700/40">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-xs font-semibold">Backend AI Server URL</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${apiBase ? 'bg-teal-900/40 text-teal-300' : 'bg-amber-900/40 text-amber-300'}`}>
+                {apiBase ? 'Connected' : 'Not Set'}
+              </span>
+            </div>
+            <p className={`text-[10px] leading-tight mb-2 ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
+              Paste your free Cloudflare Tunnel, localtunnel, or Hugging Face Space URL:
+            </p>
+            <div className="flex gap-1.5">
+              <input
+                type="url"
+                value={customBackend}
+                onChange={e => setCustomBackend(e.target.value)}
+                placeholder="http://127.0.0.1:8000"
+                className={`flex-1 px-2.5 py-1.5 rounded-lg border text-xs outline-none focus:ring-1 focus:ring-teal-500 font-mono ${dark ? 'bg-gray-800 border-gray-700 text-white placeholder-gray-500' : 'bg-gray-50 border-gray-300 text-gray-900 placeholder-gray-400'}`}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const val = customBackend.trim().replace(/\/+$/, '');
+                  if (val) {
+                    localStorage.setItem('cds_backend_url', val);
+                  } else {
+                    localStorage.removeItem('cds_backend_url');
+                  }
+                  API_BASE = getApiBase();
+                  setApiBase(API_BASE);
+                  alert('Backend Server URL saved successfully!');
+                }}
+                className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-500 text-white text-xs font-bold transition-colors cursor-pointer shadow-sm"
+              >
+                Save
+              </button>
+            </div>
           </div>
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-3">

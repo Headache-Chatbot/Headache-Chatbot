@@ -29,8 +29,8 @@ COPY data/              ./data/
 # Copy built frontend from stage 1
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 
-# Railway / Render inject $PORT at runtime
-ENV PORT=8000
-EXPOSE 8000
+# Railway / Render / Hugging Face Spaces port
+ENV PORT=7860
+EXPOSE 7860
 
 CMD ["python", "cloud_main.py"]
