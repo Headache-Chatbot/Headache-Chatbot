@@ -1,4 +1,4 @@
-﻿# ── Stage 1: Build React frontend ─────────────────────────────────────────────
+# ── Stage 1: Build React frontend ─────────────────────────────────────────────
 FROM node:20-slim AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package.json ./

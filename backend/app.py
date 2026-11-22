@@ -451,6 +451,8 @@ def get_guideline_info():
 frontend_dist = repo_root / "frontend" / "dist"
 if frontend_dist.exists():
     app.mount("/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="assets")
+    if (frontend_dist / "assets").exists():
+        app.mount("/Headache-Chatbot/assets", StaticFiles(directory=str(frontend_dist / "assets")), name="gh_assets")
 
     @app.get("/{full_path:path}")
     def serve_frontend(full_path: str):

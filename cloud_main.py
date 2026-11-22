@@ -1,4 +1,4 @@
-﻿"""
+"""
 Cloud entry point — used when deployed to Railway/Render/etc.
 Reads PORT from environment variable, no browser launch.
 """
