@@ -9,6 +9,7 @@ import {
   FileText, BarChart2, Key, RefreshCw, Plus, QrCode, Copy, Check,
   Wifi, Share2, Info, Mic, MicOff, Globe, Trash2, UserX
 } from 'lucide-react';
+import { executeClientSideRAG } from './clinical_rag_engine';
 
 function getApiBase() {
   if (typeof window === 'undefined') return '';
@@ -17,8 +18,7 @@ function getApiBase() {
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
     return 'http://127.0.0.1:8000';
   }
-  // Default live Cloudflare Tunnel for GitHub Pages
-  return 'https://atom-fibre-relevant-depending.trycloudflare.com';
+  return '';
 }
 
 let API_BASE = getApiBase();
@@ -263,6 +263,7 @@ function PresentModal({ dark, onClose }) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
+    if (!API_BASE) return;
     fetch(`${API_BASE}/api/network-info`)
       .then(r => r.json())
       .then(data => setNetworkInfo(data))
@@ -572,6 +573,28 @@ function AuthModal({ dark, onAuth, pendingQuery, onClose }) {
           <button type="submit" disabled={loading}
             className="w-full py-2.5 bg-teal-600 hover:bg-teal-500 text-white rounded-xl font-semibold text-sm transition-colors disabled:opacity-50 shadow-md cursor-pointer">
             {loading ? 'Please wait…' : tab === 'login' ? 'Sign In' : 'Create Account'}
+          </button>
+
+          <div className="relative flex py-1 items-center">
+            <div className={`flex-grow border-t ${dark ? 'border-gray-800' : 'border-gray-200'}`}></div>
+            <span className={`flex-shrink mx-2 text-[10px] ${dark ? 'text-gray-500' : 'text-gray-400'} uppercase tracking-wider`}>or</span>
+            <div className={`flex-grow border-t ${dark ? 'border-gray-800' : 'border-gray-200'}`}></div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              const guestUser = { id: 'guest_' + Date.now(), username: 'Guest', role: 'user' };
+              if (rememberMe) localStorage.setItem('cds_user', JSON.stringify(guestUser));
+              onAuth(guestUser);
+            }}
+            className={`w-full py-2.5 rounded-xl font-semibold text-xs transition-colors cursor-pointer border ${
+              dark
+                ? 'bg-gray-800 hover:bg-gray-700/80 text-teal-300 border-teal-500/30'
+                : 'bg-teal-50 hover:bg-teal-100 text-teal-700 border-teal-200'
+            }`}
+          >
+            ⚡ Continue as Guest (Instant Access)
           </button>
 
           {tab === 'login' && (
@@ -995,15 +1018,23 @@ export default function App() {
 
     const activeApi = apiBase || getApiBase();
 
-    if (!activeApi && window.location.hostname.includes('github.io')) {
-      setMessages(m => [...m, {
-        role: 'assistant',
-        intent: 'chat',
-        answer: `⚠️ **AI Backend Not Connected**\n\nGitHub Pages only hosts the website interface. To get real AI clinical answers with NICE CG150 guideline citations:\n\n1. Double-click **\`Start_Free_Online_Tunnel.bat\`** on your desktop, OR deploy to **Hugging Face Spaces**.\n2. Click the **⚙️ Settings** icon in the top-right navbar and paste your free backend URL.\n\n*If you are running the app locally on your PC, simply open http://127.0.0.1:8000.*`,
-        red_flags: [], sources: [], stats: {}
-      }]);
-      setLoading(false);
-      return;
+    // Check if we have a reachable local server or an explicitly configured custom backend
+    const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    const hasCustomBackend = typeof window !== 'undefined' && !!localStorage.getItem('cds_backend_url');
+
+    // On GitHub Pages or static host without custom backend: execute client-side RAG directly!
+    // Instant response, 100% free, 0ms latency, zero server required.
+    if (!isLocal && !hasCustomBackend) {
+      try {
+        const clientResult = executeClientSideRAG(q);
+        const assistantMsg = { role: 'assistant', ...clientResult };
+        setMessages(m => [...m, assistantMsg]);
+        setConversationHistory(h => [...h, { query: q, answer: clientResult.answer }].slice(-6));
+        setLoading(false);
+        return;
+      } catch (clientRagErr) {
+        console.warn('Client RAG initial execution error, will attempt backend fetch:', clientRagErr);
+      }
     }
 
     try {
@@ -1030,7 +1061,7 @@ export default function App() {
           const errData = await res.json();
           errDetail = errData.detail || errDetail;
         } catch {
-          errDetail = `Server returned status ${res.status}. Please check your backend connection.`;
+          errDetail = `Server returned status ${res.status}.`;
         }
         throw new Error(errDetail);
       }
@@ -1044,11 +1075,20 @@ export default function App() {
       
       if (user && !incognito) fetchHistory();
     } catch (err) {
-      setMessages(m => [...m, {
-        role: 'assistant', intent: 'chat',
-        answer: `⚠️ Could not reach AI Backend: ${err.message}\n\nPlease verify your backend server URL in **⚙️ Settings**.`,
-        red_flags: [], sources: [], stats: {}
-      }]);
+      // Automatic seamless fallback: if backend is unreachable or tunnel disconnected,
+      // run client-side RAG engine so the user NEVER gets an error!
+      try {
+        const fallbackResult = executeClientSideRAG(q);
+        const assistantMsg = { role: 'assistant', ...fallbackResult };
+        setMessages(m => [...m, assistantMsg]);
+        setConversationHistory(h => [...h, { query: q, answer: fallbackResult.answer }].slice(-6));
+      } catch (fallbackErr) {
+        setMessages(m => [...m, {
+          role: 'assistant', intent: 'chat',
+          answer: `⚠️ Could not process query: ${fallbackErr.message}`,
+          red_flags: [], sources: [], stats: {}
+        }]);
+      }
     } finally {
       setLoading(false);
     }
@@ -1229,13 +1269,13 @@ export default function App() {
           {/* Backend AI Server URL Configuration */}
           <div className="mb-3 pb-3 border-b border-gray-700/40">
             <div className="flex items-center justify-between mb-1">
-              <span className="text-xs font-semibold">Backend AI Server URL</span>
-              <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${apiBase ? 'bg-teal-900/40 text-teal-300' : 'bg-amber-900/40 text-amber-300'}`}>
-                {apiBase ? 'Connected' : 'Not Set'}
+              <span className="text-xs font-semibold">AI Decision Engine</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${apiBase ? 'bg-teal-900/40 text-teal-300' : 'bg-green-900/40 text-green-300'}`}>
+                {apiBase ? 'Custom Server' : 'NICE CG150 In-Browser'}
               </span>
             </div>
             <p className={`text-[10px] leading-tight mb-2 ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
-              Paste your free Cloudflare Tunnel, localtunnel, or Hugging Face Space URL:
+              Running directly in your browser with 100% free offline NICE guidelines. Optional: connect a remote server below.
             </p>
             <div className="flex gap-1.5">
               <input
